@@ -1,0 +1,28 @@
+#+TITLE: A StarPU Backend for Petalisp
+
+This library accelerates Petalisp programs by converting them to C++ and
+CUDA code and scheduling them with the StarPU task scheduling framework.
+
+** Installation and Usage
+Simply clone this repository into a path that can be located by your Lisp
+implementation.  If you use quicklisp, the following line should work:
+
+#+BEGIN_SRC sh
+git clone https://github.com/marcoheisig/Petalisp.starpu-backend ~/quicklisp/local-projects/starpu-backend
+#+END_SRC
+
+You should now be able to load the system with ASDF:
+
+#+BEGIN_SRC lisp
+(asdf:load-system "petalisp.starpu-backend")
+#+END_SRC
+
+The final step is to install the StarPU backend as Petalisp's default
+backend:
+
+#+BEGIN_SRC lisp
+(setf petalisp:*backend* (petalisp.starpu-backend:make-starpu-backend))
+#+END_SRC
+
+That's it, you successfully ported all your Petalisp programs to C++, CUDA,
+and StarPU :)
