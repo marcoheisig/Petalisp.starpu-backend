@@ -27,8 +27,8 @@
                    :name (intern (princ-to-string blueprint) #.*package*)
                    :modes (blueprint-modes blueprint)
                    :cpu-func-0 cpu-func
-                   ;:cuda-func-0 cuda-func
-                   )))
+                   :cuda-func-0 cuda-func
+                   :cuda-flags-0 cl-starpu:+starpu-cuda-async+)))
             (setf codelet value)
             (when cache
               (setf (gethash blueprint cache) value))))))

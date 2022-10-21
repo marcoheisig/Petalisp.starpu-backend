@@ -66,13 +66,13 @@
         (dolist (buffer buffers)
           (setf (buffer-starpu-data buffer) data))))
     (unwind-protect (funcall thunk)
-      ;; Free all StarPU data.
+      ;; Unregister all StarPU data.  We start with the root data, because
+      ;; here we actually need to ensure data consistency.  Then unregister
+      ;; all the rest.
+      (dolist (buffer (program-root-buffers program))
+        (starpu:data-unregister (buffer-starpu-data buffer)))
       (do-program-buffers (buffer program)
-        (let ((data (svref *buffer-starpu-data-vector* (buffer-number buffer))))
-          (when (starpu:datap data)
-            (if (root-buffer-p buffer)
-                (starpu:data-unregister data)
-                (starpu:data-unregister-no-coherency data))))))
+        (starpu:data-unregister-no-coherency (buffer-starpu-data buffer))))
     ;; Done.
     (values-list results)))
 
