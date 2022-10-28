@@ -64,16 +64,19 @@
 
 (defvar *coeff-counter*)
 
+(defvar *index-counter*)
+
 (defun write-instructions (stream)
   (format stream "  {~%")
   (when *emit-verbose-code*
     (format stream "    printf(\"iteration (~{~A~^ ~})\\n\"~{, i~D~});~%"
             (loop for axis from 0 for range-info in *iteration-space-info*
-                  collect "%lli")
+                  collect "%jd")
             (loop for axis from 0 for range-info in *iteration-space-info*
                   collect axis)))
   (let ((instruction-number -1)
-        (*coeff-counter* -1))
+        (*coeff-counter* 0)
+        (*index-counter* 0))
     (ucons:do-ulist (instruction-blueprint *instruction-blueprint-ulist*)
       (write-instruction
        (format nil "v~D" (incf instruction-number))
@@ -105,28 +108,43 @@
                     name
                     input-numbers)))
          (when *emit-verbose-code*
-           (format stream "    printf(\"~A = ~A\\n\", v~D);~%"
+           (format stream "    printf(\"~A = ~A\\n\", ~A);~%"
                    target-variable
                    (type-format-string type)
                    target-variable)))))
     ((ucons:ulist* :load buffer-number irefs)
-     (format stream "    ~A ~A = src~D["
+     (format stream "     int64_t index~D = " *index-counter*)
+     (write-irefs irefs (format nil "src~D" buffer-number) stream)
+     (format stream ";~%")
+     (format stream "    ~A ~A = src~D[index~D];~%"
              (first (nth buffer-number *src-array-info*))
              target-variable
-             buffer-number)
-     (write-irefs irefs (format nil "src~D" buffer-number) stream)
-     (format stream "];~%")
+             buffer-number
+             *index-counter*)
      (when *emit-verbose-code*
-       (format stream "    printf(\"~A = ~A\\n\", ~A);~%"
+       (format stream "    printf(\"~A = src~D[%jd] = ~A\\n\", index~D, ~A);~%"
                target-variable
+               buffer-number
                (type-format-string (first (nth buffer-number *src-array-info*)))
-               target-variable)))
+               *index-counter*
+               target-variable))
+     (incf *index-counter*))
     ((ucons:ulist* :store input buffer-number irefs)
-     (format stream "    dst~D[" buffer-number)
+     (format stream "     int64_t index~D = " *index-counter*)
      (write-irefs irefs (format nil "dst~D" buffer-number) stream)
-     (format stream "] = v~D;~%" (ucons:ucar (ucons:ucdr input))))
+     (format stream ";~%")
+     (format stream "     dst~D[index~D] = v~D;~%"
+             buffer-number
+             *index-counter*
+             (ucons:ucar (ucons:ucdr input)))
+     (when *emit-verbose-code*
+       (format stream "     printf(\"dst~D[%jd] = v~D\\n\", index~D);~%"
+               buffer-number
+               (ucons:ucar (ucons:ucdr input))
+               *index-counter*))
+     (incf *index-counter*))
     ((ucons:ulist :iref iref)
-     (format stream "    int64_t ~A = " target-variable)
+     (format stream "     int64_t ~A = " target-variable)
      (write-iref iref stream)
      (format stream ";~%"))))
 
@@ -145,9 +163,11 @@
   (trivia:ematch iref
     ((ucons:ulist permutation scaling offset)
      (when (not scaling)
-       (setf scaling (format nil "coeff~D" (incf *coeff-counter*))))
+       (setf scaling (format nil "coeff~D" *coeff-counter*))
+       (incf *coeff-counter*))
      (when (not offset)
-       (setf offset (format nil "coeff~D" (incf *coeff-counter*))))
+       (setf offset (format nil "coeff~D" *coeff-counter*))
+       (incf *coeff-counter*))
      (cond ((eql scaling 0)
             (format stream "~D" offset))
            ((and (eql offset 0) (eql scaling 1))
@@ -219,7 +239,7 @@
               arguments)
       (when *emit-verbose-code*
         (loop for argument in arguments do
-          (format stream "  printf(\"~A = %lli\\n\", ~:*~A);~%"
+          (format stream "  printf(\"~A = %jd\\n\", ~:*~A);~%"
                   argument)))))
   ;; Unpack all StarPU buffers.
   (let ((buffer-number -1))
