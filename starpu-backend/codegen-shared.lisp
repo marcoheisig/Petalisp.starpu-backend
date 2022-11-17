@@ -113,7 +113,7 @@
                    (type-format-string type)
                    target-variable)))))
     ((ucons:ulist* :load buffer-number irefs)
-     (format stream "     int64_t index~D = " *index-counter*)
+     (format stream "    int64_t index~D = " *index-counter*)
      (write-irefs irefs (format nil "src~D" buffer-number) stream)
      (format stream ";~%")
      (format stream "    ~A ~A = src~D[index~D];~%"
@@ -130,10 +130,10 @@
                target-variable))
      (incf *index-counter*))
     ((ucons:ulist* :store input buffer-number irefs)
-     (format stream "     int64_t index~D = " *index-counter*)
+     (format stream "    int64_t index~D = " *index-counter*)
      (write-irefs irefs (format nil "dst~D" buffer-number) stream)
      (format stream ";~%")
-     (format stream "     dst~D[index~D] = v~D;~%"
+     (format stream "    dst~D[index~D] = v~D;~%"
              buffer-number
              *index-counter*
              (ucons:ucar (ucons:ucdr input)))
@@ -144,7 +144,7 @@
                *index-counter*))
      (incf *index-counter*))
     ((ucons:ulist :iref iref)
-     (format stream "     int64_t ~A = " target-variable)
+     (format stream "    int64_t ~A = " target-variable)
      (write-iref iref stream)
      (format stream ";~%"))))
 
@@ -252,14 +252,14 @@
         (2
          (format stream "  dst~D = (~A*)STARPU_MATRIX_GET_PTR(buffers[~D]);~%"
                  index type buffer-number)
-         (format stream "  dst~Ds0 = STARPU_MATRIX_GET_NY(buffers[~D]);~%"
+         (format stream "  dst~Ds0 = STARPU_MATRIX_GET_LD(buffers[~D]);~%"
                  index buffer-number))
         (otherwise
          (format stream "  dst~D = (~A*)STARPU_BLOCK_GET_PTR(buffers[~D]);~%"
                  index type buffer-number)
-         (format stream "  dst~Ds1 = STARPU_BLOCK_GET_NZ(buffers[~D])~@[ * dst~Ds2~];~%"
+         (format stream "  dst~Ds1 = STARPU_BLOCK_GET_LDY(buffers[~D]);~%"
                  index buffer-number (and (> rank 3) index))
-         (format stream "  dst~Ds0 = STARPU_BLOCK_GET_NY(buffers[~D]) * dst~Ds1;~%"
+         (format stream "  dst~Ds0 = STARPU_BLOCK_GET_LDZ(buffers[~D]);~%"
                  index buffer-number index))))
     (loop for (type rank) in *src-array-info* for index from 0 do
       (incf buffer-number)
@@ -270,14 +270,14 @@
         (2
          (format stream "  src~D = (~A*)STARPU_MATRIX_GET_PTR(buffers[~D]);~%"
                  index type buffer-number)
-         (format stream "  src~Ds0 = STARPU_MATRIX_GET_NY(buffers[~D]);~%"
+         (format stream "  src~Ds0 = STARPU_MATRIX_GET_LD(buffers[~D]);~%"
                  index buffer-number))
         (otherwise
          (format stream "  src~D = (~A*)STARPU_BLOCK_GET_PTR(buffers[~D]);~%"
                  index type buffer-number)
-         (format stream "  src~Ds1 = STARPU_BLOCK_GET_NZ(buffers[~D])~@[ * src~Ds2~];~%"
+         (format stream "  src~Ds1 = STARPU_BLOCK_GET_LDY(buffers[~D]);~%"
                  index buffer-number (and (> rank 3) index))
-         (format stream "  src~Ds0 = STARPU_BLOCK_GET_NY(buffers[~D]) * src~Ds1;~%"
+         (format stream "  src~Ds0 = STARPU_BLOCK_GET_LDZ(buffers[~D]);~%"
                  index buffer-number index))))))
 
 (defun kernel-coeffs ()
