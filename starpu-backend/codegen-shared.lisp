@@ -9,17 +9,21 @@
 ;;;
 ;;; iN is the iteration variable of the Nth loop.
 ;;;
-;;; srcK is the data pointer of the Kth source array.
+;;; oN is the Nth offset parameter appearing in the kernel.
 ;;;
-;;; dstKsN is the stride of the Nth axis of the Kth destination array.
+;;; sN is the Nth scaling parameter appearing in the kernel.
 ;;;
-;;; dstKoN is the offset of the Nth axis of the Kth destination array.
+;;; dstK is the data pointer of the Kth target array.
 ;;;
-;;; The variables srcK, srcKsN, and srcKoN are analogously to their dst
-;;; counterparts, but for source arrays.
-
-;;; The current blueprint.
-(defvar *blueprint*)
+;;; dstKskip is the position of the first element of the Kth target array
+;;; that was actually allocated.
+;;;
+;;; dstKsI is the stride of the Ith axis of the Kth destination array.
+;;;
+;;; dstKiL is the index of the Lth reference into Kth destination array.
+;;;
+;;; The variables srcK, srcKskip, srcKsI, and srcKiT are analogously to
+;;; their dst counterparts, but for source arrays.
 
 ;;; The rank of the iteration space of the current blueprint.
 (defvar *iteration-space-rank*)
@@ -28,14 +32,16 @@
 ;;; either :CONTIGUOUS or :STRIDED.
 (defvar *iteration-space-info*)
 
-;;; An (TYPE RANK) info whose Kth entry describes the Kth destination array.
+;;; (NTYPE . TRANSFORMATIONS) entries where the Kth entry describes the
+;;; type and all references into the Kth target array.
 (defvar *dst-array-info*)
 
-;;; An (TYPE RANK) info whose Kth entry describes the Kth source array.
+;;; (NTYPE . TRANSFORMATIONS) entries where the Kth entry describes the
+;;; type and all references into the Kth source array.
 (defvar *src-array-info*)
 
-;;; An ulist of instruction blueprints.
-(defvar *instruction-blueprint-ulist*)
+;;; An list of instruction blueprints (converted from ulists to lists).
+(defvar *instruction-blueprints*)
 
 ;;; A boolean, indicating whether the generated code should print all its
 ;;; operations to stdout.
@@ -45,56 +51,60 @@
   `(call-with-blueprint-info ,blueprint (lambda () ,@body)))
 
 (defun call-with-blueprint-info (blueprint thunk)
-  (flet ((umap (fn ulist)
-           (loop for ucons = ulist then (ucons:ucdr ucons) until (null ucons)
-                 collect (funcall fn (ucons:ucar ucons))))
-         (decode-array-info (info)
-           (trivia:ematch info
-             ((ucons:ulist ntype rank)
-              (list (ntype-c-type ntype) rank)))))
-    (trivia:ematch blueprint
-      ((ucons:ulist* iteration-space-info dst-info src-info instruction-blueprint-ulist)
-       (let* ((*blueprint* blueprint)
-              (*iteration-space-info* (ucons:list-from-ulist iteration-space-info))
-              (*iteration-space-rank* (length *iteration-space-info*))
-              (*dst-array-info* (umap #'decode-array-info dst-info))
-              (*src-array-info* (umap #'decode-array-info src-info))
-              (*instruction-blueprint-ulist* instruction-blueprint-ulist))
-         (funcall thunk))))))
+  (trivia:ematch (ucons:tree-from-utree blueprint)
+    ((list* iteration-space targets sources instructions)
+     (let* ((*iteration-space-info* iteration-space)
+            (*iteration-space-rank* (length iteration-space))
+            (*dst-array-info* targets)
+            (*src-array-info* sources)
+            (*instruction-blueprints* instructions))
+       (funcall thunk)))))
 
-(defvar *coeff-counter*)
+(defvar *scaling-counter*)
+
+(defvar *offset-counter*)
 
 (defvar *index-counter*)
 
-(defun write-instructions (stream)
+(defun write-body (stream)
   (format stream "  {~%")
   (when *emit-verbose-code*
     (format stream "    printf(\"iteration (~{~A~^ ~})\\n\"~{, i~D~});~%"
-            (loop for axis from 0 for range-info in *iteration-space-info*
-                  collect "%jd")
-            (loop for axis from 0 for range-info in *iteration-space-info*
-                  collect axis)))
-  (let ((instruction-number -1)
-        (*coeff-counter* 0)
+            (loop for axis below *iteration-space-rank* collect "%jd")
+            (loop for axis below *iteration-space-rank* collect axis)))
+  (let ((instruction-number 0)
+        (*scaling-counter* 0)
+        (*offset-counter* 0)
         (*index-counter* 0))
-    (ucons:do-ulist (instruction-blueprint *instruction-blueprint-ulist*)
+    (loop for (nil . refs) in *dst-array-info* for k from 0 do
+      (loop for irefs in refs for l from 0 do
+        (format stream "    int64_t dst~Di~D = " k l)
+        (write-irefs irefs (format nil "dst~D" k) stream)
+        (format stream ";~%")))
+    (loop for (nil . refs) in *src-array-info* for k from 0 do
+      (loop for irefs in refs for l from 0 do
+        (format stream "    int64_t src~Di~D = " k l)
+        (write-irefs irefs (format nil "src~D" k) stream)
+        (format stream ";~%")))
+    (dolist (instruction-blueprint *instruction-blueprints*)
       (write-instruction
-       (format nil "v~D" (incf instruction-number))
+       (format nil "v~D" instruction-number)
        instruction-blueprint
-       stream)))
+       stream)
+      (incf instruction-number)))
   (format stream "  }~%"))
 
 (defun write-instruction (target-variable instruction stream)
   (trivia:ematch instruction
-    ((ucons:ulist* :call number-of-values operator inputs)
+    ((list* :call number-of-values operator inputs)
      (unless (= 1 number-of-values)
        (error "Cannot (yet) create C++ kernels containing multiple valued functions."))
      (multiple-value-bind (type name kind)
          (decode-operator operator)
-       (let ((input-numbers (mapcar #'second (ucons:tree-from-utree inputs))))
+       (let ((input-numbers (mapcar #'second inputs)))
          (ecase kind
            (:infix
-            (assert (= 2 (length input-numbers)))
+            (assert (= 2 (length inputs)))
             (format stream "    ~A ~A = v~D ~A v~D;~%"
                     type
                     target-variable
@@ -112,12 +122,17 @@
                    target-variable
                    (type-format-string type)
                    target-variable)))))
-    ((ucons:ulist* :load buffer-number irefs)
-     (format stream "    int64_t index~D = " *index-counter*)
-     (write-irefs irefs (format nil "src~D" buffer-number) stream)
+    ((list* :load buffer-number ref-number offsets)
+     (format stream "    int64_t index~D = src~Di~D"
+             *index-counter* buffer-number ref-number)
+     (loop for (offset . more-offsets) on offsets for axis from 0 do
+       (unless (zerop offset)
+         (if (null more-offsets)
+             (format stream " + ~D" offset)
+             (format stream " + src~Ds~D * ~D" buffer-number axis offset))))
      (format stream ";~%")
      (format stream "    ~A ~A = src~D[index~D];~%"
-             (first (nth buffer-number *src-array-info*))
+             (ntype-c-type (first (nth buffer-number *src-array-info*)))
              target-variable
              buffer-number
              *index-counter*)
@@ -125,59 +140,56 @@
        (format stream "    printf(\"~A = src~D[%jd] = ~A\\n\", index~D, ~A);~%"
                target-variable
                buffer-number
-               (type-format-string (first (nth buffer-number *src-array-info*)))
+               (type-format-string
+                (ntype-c-type
+                 (first (nth buffer-number *src-array-info*))))
                *index-counter*
                target-variable))
      (incf *index-counter*))
-    ((ucons:ulist* :store input buffer-number irefs)
-     (format stream "    int64_t index~D = " *index-counter*)
-     (write-irefs irefs (format nil "dst~D" buffer-number) stream)
-     (format stream ";~%")
+    ((list :store (list _ instruction-number) buffer-number ref-number)
+     (format stream "    int64_t index~D = dst~Di~D;~%"
+             *index-counter* buffer-number ref-number)
      (format stream "    dst~D[index~D] = v~D;~%"
              buffer-number
              *index-counter*
-             (ucons:ucar (ucons:ucdr input)))
+             instruction-number)
      (when *emit-verbose-code*
-       (format stream "     printf(\"dst~D[%jd] = v~D\\n\", index~D);~%"
+       (format stream "    printf(\"dst~D[%jd] = v~D\\n\", index~D);~%"
                buffer-number
-               (ucons:ucar (ucons:ucdr input))
+               instruction-number
                *index-counter*))
      (incf *index-counter*))
-    ((ucons:ulist :iref iref)
+    ((list :iref iref)
      (format stream "    int64_t ~A = " target-variable)
      (write-iref iref stream)
      (format stream ";~%"))))
 
 (defun write-irefs (irefs prefix stream)
-  (loop for (iref rest) on (ucons:list-from-ulist irefs) for axis from 0 do
-    (format stream "(")
-    (write-iref iref stream)
-    (if (null rest)
-        (format stream " - ~Ao~D)"
-                prefix axis)
-        (format stream " * ~As~d - ~Ao~D) + "
-                prefix axis prefix axis)))
-  (when (null irefs) (format stream "0")))
+  (if (null irefs)
+      (format stream "0")
+      (progn
+        (format stream "(")
+        (loop for (iref rest) on irefs for axis from 0 do
+          (write-iref iref stream)
+          (if (null rest)
+              (format stream " - ~Askip" prefix)
+              (format stream " * ~As~d + " prefix axis)))
+        (format stream ")"))))
 
 (defun write-iref (iref stream)
-  (trivia:ematch iref
-    ((ucons:ulist permutation scaling offset)
-     (when (not scaling)
-       (setf scaling (format nil "coeff~D" *coeff-counter*))
-       (incf *coeff-counter*))
-     (when (not offset)
-       (setf offset (format nil "coeff~D" *coeff-counter*))
-       (incf *coeff-counter*))
-     (cond ((eql scaling 0)
-            (format stream "~D" offset))
-           ((and (eql offset 0) (eql scaling 1))
-            (format stream "i~D" permutation))
-           ((eql scaling 1)
-            (format stream "(i~D + ~D)" permutation offset))
-           ((eql offset 0)
-            (format stream "(i~D * ~D)" permutation scaling))
-           (t
-            (format stream "(i~D * ~A + ~A)" permutation scaling offset))))))
+  (let ((offset (format nil "o~D" *offset-counter*)))
+    (incf *offset-counter*)
+    (trivia:ematch iref
+      ((list _ 0)
+       (format stream "~D" offset))
+      ((list permutation 1)
+       (format stream "(i~D + ~D)" permutation offset))
+      ((list permutation (and scaling (type integer)))
+       (format stream "(i~D * ~A + ~A)" permutation scaling offset))
+      ((list permutation :any)
+       (let ((scaling (format nil "s~D" *scaling-counter*)))
+         (incf *scaling-counter*)
+         (format stream "(i~D * ~A + ~A)" permutation scaling offset))))))
 
 (defun write-prologue (name stream)
   (when *emit-verbose-code*
@@ -186,53 +198,47 @@
   (loop for axis below *iteration-space-rank* do
     (format stream "  int64_t start~D, end~D, step~D;~%" axis axis axis))
   ;; Declare the variables for each array data pointer and the
-  ;; corresponding offsets and strides.
-  (loop for (type rank) in *dst-array-info* for axis from 0 do
-    (format stream "  ~A* __restrict dst~D;~@[ uint64_t ~{dst~Do~D~^, ~};~]~@[ uint64_t ~{dst~Ds~D~^, ~};~]~%"
-            type axis
-            (loop for index from 0 below rank
-                  collect axis
-                  collect index)
-            (loop for index from 0 below (1- rank)
-                  collect axis
-                  collect index)))
-  (loop for (type rank) in *src-array-info* for axis from 0 do
-    (format stream "  ~A* __restrict src~D;~@[ uint64_t ~{src~Do~D~^, ~};~]~@[ uint64_t ~{src~Ds~D~^, ~};~]~%"
-            type axis
-            (loop for index from 0 below rank
-                  collect axis
-                  collect index)
-            (loop for index from 0 below (1- rank)
-                  collect axis
-                  collect index)))
-  ;; Declare variables for each NIL scaling of offset in on of the
-  ;; transformations of the kernel's load and store instructions.
-  (loop for name in (kernel-coeffs) do
-    (format stream "  int64_t ~A;~%" name))
-  (let* ((arguments
+  ;; corresponding skips and strides.
+  (loop for (ntype ref) in *dst-array-info* for axis from 0 do
+    (let ((type (ntype-c-type ntype))
+          (rank (length ref)))
+      (format stream "  ~A* __restrict dst~D; uint64_t dst~Dskip;~@[ uint64_t ~{dst~Ds~D~^, ~};~]~%"
+              type axis axis
+              (loop for index from 0 below (1- rank)
+                    collect axis
+                    collect index))))
+  (loop for (ntype ref) in *src-array-info* for axis from 0 do
+    (let ((type (ntype-c-type ntype))
+          (rank (length ref)))
+      (format stream "  ~A* __restrict src~D; uint64_t src~Dskip;~@[ uint64_t ~{src~Ds~D~^, ~};~]~%"
+              type axis axis
+              (loop for index from 0 below (1- rank)
+                    collect axis
+                    collect index))))
+  (let* ((coeffs (kernel-coeffs))
+         (arguments
            (append
             ;; Collect the iteration space bounds.
             (loop for axis below *iteration-space-rank*
                   collect (format nil "start~D" axis)
                   collect (format nil "end~D" axis)
                   collect (format nil "step~D" axis))
-            ;; Collect strides and offsets that couldn't be encoded as
-            ;; buffer properties.
-            (loop for (nil rank) in *dst-array-info* for index from 0
+            ;; Collect strides that couldn't be encoded as buffer
+            ;; properties, and skips
+            (loop for (nil ref) in *dst-array-info* for index from 0
+                  collect (format nil "dst~Dskip" index)
                   append
-                  (append
-                   (loop for axis from 0 below rank
-                         collect (format nil "dst~Do~D" index axis))
-                   (loop for axis from 3 below (1- rank)
-                         collect (format nil "dst~Ds~D" index axis))))
-            (loop for (nil rank) in *src-array-info* for index from 0
+                  (loop for axis from 3 below (1- (length ref))
+                        collect (format nil "dst~Ds~D" index axis)))
+            (loop for (nil ref) in *src-array-info* for index from 0
+                  collect (format nil "src~Dskip" index)
                   append
-                  (append
-                   (loop for axis from 0 below rank
-                         collect (format nil "src~Do~D" index axis))
-                   (loop for axis from 3 below (1- rank)
-                         collect (format nil "src~Ds~D" index axis))))
-            (kernel-coeffs))))
+                  (loop for axis from 3 below (1- (length ref))
+                        collect (format nil "src~Ds~D" index axis)))
+            coeffs)))
+    ;; Declare variables for the remaining coefficients.
+    (unless (null coeffs)
+      (format stream "  int64_t~{ ~A~^,~};~%" coeffs))
     ;; Unpack all StarPU arguments.
     (unless (null arguments)
       (format stream "  starpu_codelet_unpack_args(args~{, &~A~});~%"
@@ -243,58 +249,67 @@
                   argument)))))
   ;; Unpack all StarPU buffers.
   (let ((buffer-number -1))
-    (loop for (type rank) in *dst-array-info* for index from 0 do
-      (incf buffer-number)
-      (case rank
-        ((0 1)
-         (format stream "  dst~D = (~A*)STARPU_VECTOR_GET_PTR(buffers[~D]);~%"
-                 index type buffer-number))
-        (2
-         (format stream "  dst~D = (~A*)STARPU_MATRIX_GET_PTR(buffers[~D]);~%"
-                 index type buffer-number)
-         (format stream "  dst~Ds0 = STARPU_MATRIX_GET_LD(buffers[~D]);~%"
-                 index buffer-number))
-        (otherwise
-         (format stream "  dst~D = (~A*)STARPU_BLOCK_GET_PTR(buffers[~D]);~%"
-                 index type buffer-number)
-         (format stream "  dst~Ds1 = STARPU_BLOCK_GET_LDY(buffers[~D]);~%"
-                 index buffer-number (and (> rank 3) index))
-         (format stream "  dst~Ds0 = STARPU_BLOCK_GET_LDZ(buffers[~D]);~%"
-                 index buffer-number index))))
-    (loop for (type rank) in *src-array-info* for index from 0 do
-      (incf buffer-number)
-      (case rank
-        ((0 1)
-         (format stream "  src~D = (~A*)STARPU_VECTOR_GET_PTR(buffers[~D]);~%"
-                 index type buffer-number))
-        (2
-         (format stream "  src~D = (~A*)STARPU_MATRIX_GET_PTR(buffers[~D]);~%"
-                 index type buffer-number)
-         (format stream "  src~Ds0 = STARPU_MATRIX_GET_LD(buffers[~D]);~%"
-                 index buffer-number))
-        (otherwise
-         (format stream "  src~D = (~A*)STARPU_BLOCK_GET_PTR(buffers[~D]);~%"
-                 index type buffer-number)
-         (format stream "  src~Ds1 = STARPU_BLOCK_GET_LDY(buffers[~D]);~%"
-                 index buffer-number (and (> rank 3) index))
-         (format stream "  src~Ds0 = STARPU_BLOCK_GET_LDZ(buffers[~D]);~%"
-                 index buffer-number index))))))
+    (loop for (ntype ref) in *dst-array-info* for index from 0 do
+      (let ((type (ntype-c-type ntype))
+            (rank (length ref)))
+        (incf buffer-number)
+        (case rank
+          ((0 1)
+           (format stream "  dst~D = (~A*)STARPU_VECTOR_GET_PTR(buffers[~D]);~%"
+                   index type buffer-number))
+          (2
+           (format stream "  dst~D = (~A*)STARPU_MATRIX_GET_PTR(buffers[~D]);~%"
+                   index type buffer-number)
+           (format stream "  dst~Ds0 = STARPU_MATRIX_GET_LD(buffers[~D]);~%"
+                   index buffer-number))
+          (otherwise
+           (format stream "  dst~D = (~A*)STARPU_BLOCK_GET_PTR(buffers[~D]);~%"
+                   index type buffer-number)
+           (format stream "  dst~Ds1 = STARPU_BLOCK_GET_LDY(buffers[~D]);~%"
+                   index buffer-number)
+           (format stream "  dst~Ds0 = STARPU_BLOCK_GET_LDZ(buffers[~D]);~%"
+                   index buffer-number)))))
+    (loop for (ntype ref) in *src-array-info* for index from 0 do
+      (let ((type (ntype-c-type ntype))
+            (rank (length ref)))
+        (incf buffer-number)
+        (case rank
+          ((0 1)
+           (format stream "  src~D = (~A*)STARPU_VECTOR_GET_PTR(buffers[~D]);~%"
+                   index type buffer-number))
+          (2
+           (format stream "  src~D = (~A*)STARPU_MATRIX_GET_PTR(buffers[~D]);~%"
+                   index type buffer-number)
+           (format stream "  src~Ds0 = STARPU_MATRIX_GET_LD(buffers[~D]);~%"
+                   index buffer-number))
+          (otherwise
+           (format stream "  src~D = (~A*)STARPU_BLOCK_GET_PTR(buffers[~D]);~%"
+                   index type buffer-number)
+           (format stream "  src~Ds1 = STARPU_BLOCK_GET_LDY(buffers[~D]);~%"
+                   index buffer-number)
+           (format stream "  src~Ds0 = STARPU_BLOCK_GET_LDZ(buffers[~D]);~%"
+                   index buffer-number)))))))
 
 (defun kernel-coeffs ()
-  (let ((counter -1)
+  (let ((scaling-counter 0)
+        (offset-counter 0)
         (coeffs '()))
-    (ucons:do-ulist (instruction-blueprint *instruction-blueprint-ulist*)
-      (trivia:match instruction-blueprint
-        ((or (ucons:ulist* :load _ irefs)
-             (ucons:ulist* :store _ _ irefs)
-             (ucons:ulist* :iref irefs))
-         (ucons:do-ulist (iref irefs)
-           (trivia:ematch iref
-             ((ucons:ulist _ scaling offset)
-              (when (not scaling)
-                (push (format nil "coeff~D" (incf counter)) coeffs))
-              (when (not offset)
-                (push (format nil "coeff~D" (incf counter)) coeffs))))))))
+    (flet ((process-iref (iref)
+             (declare (ignore iref))
+             (push (format nil "s~D" scaling-counter) coeffs)
+             (incf scaling-counter)
+             (push (format nil "o~D" offset-counter) coeffs)
+             (incf offset-counter)))
+      (loop for (nil . refs) in *dst-array-info* do
+        (dolist (irefs refs)
+          (mapc #'process-iref irefs)))
+      (loop for (nil . refs) in *src-array-info* do
+        (dolist (irefs refs)
+          (mapc #'process-iref irefs)))
+      (dolist (instruction-blueprint *instruction-blueprints*)
+        (trivia:match instruction-blueprint
+          ((list :iref iref)
+           (process-iref iref)))))
     (nreverse coeffs)))
 
 (defun write-epilogue (name stream)

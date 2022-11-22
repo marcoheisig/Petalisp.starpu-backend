@@ -45,10 +45,7 @@
                             :initial-element nil)))
     (do-program-kernels (kernel program vector)
       (setf (svref vector (kernel-number kernel))
-            (kernel-blueprint
-             kernel
-             :scaling-threshold *kernel-scaling-threshold*
-             :offset-threshold *kernel-offset-threshold*)))))
+            (kernel-blueprint kernel)))))
 
 (defun cpu-func-vector (blueprint-vector codelet-vector)
   (let* ((stream (make-string-output-stream))

@@ -20,7 +20,7 @@
        (format stream "  for (int64_t i~D = start~D; i~D < end~D; i~D += step~D)~%"
                axis axis axis axis axis axis))))
   ;; Print the body.
-  (write-instructions stream)
+  (write-body stream)
   (write-epilogue name stream)
   (format stream "}~%")
   (format stream "}~%"))

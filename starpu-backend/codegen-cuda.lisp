@@ -15,13 +15,17 @@
                  collect (format nil "int64_t start~D" axis)
                  collect (format nil "int64_t end~D" axis)
                  collect (format nil "int64_t step~D" axis))
-           (loop for (type rank) in *dst-array-info* for axis from 0
+           (loop for (ntype irefs) in *dst-array-info* for axis from 0
+                 for type = (ntype-c-type ntype)
+                 for rank = (length irefs)
                  collect (format nil "~A* __restrict dst~D" type axis)
-                 append (loop for index below rank collect (format nil "uint64_t dst~Do~D" axis index))
+                 collect (format nil "uint64_t dst~Dskip" axis)
                  append (loop for index below (1- rank) collect (format nil "uint64_t dst~Ds~D" axis index)))
-           (loop for (type rank) in *src-array-info* for axis from 0
+           (loop for (ntype irefs) in *src-array-info* for axis from 0
+                 for type = (ntype-c-type ntype)
+                 for rank = (length irefs)
                  collect (format nil "const ~A* __restrict src~D" type axis)
-                 append (loop for index below rank collect (format nil "uint64_t src~Do~D" axis index))
+                 collect (format nil "uint64_t src~Dskip" axis)
                  append (loop for index below (1- rank) collect (format nil "uint64_t src~Ds~D" axis index)))
            (loop for coeff in (kernel-coeffs)
                  collect (format nil "int64_t ~A" coeff))))
@@ -41,7 +45,7 @@
            (format stream "  for (int64_t i~D = start~D; i~D < end~D; i~D += step~D)~%"
                    axis axis axis axis axis axis)))))
   ;; Write the CUDA kernel's body.
-  (write-instructions stream)
+  (write-body stream)
   (format stream "}~%~%")
   ;; Write the StarPU function that invokes the CUDA kernel.
   (format stream "extern \"C\" {~%")
@@ -65,7 +69,7 @@
      (format stream "  uint64_t size0 = (end0 - start0) / step0;~%")
      (format stream "  uint64_t size1 = (end1 - start1) / step1;~%")
      (format stream "  uint64_t size2 = (end2 - start2) / step2;~%")
-     (format stream "  dim3 tpb(min((uint64_t)4, size0), min((uint64_t)4, size1), min((uint64_t)8, size2));~%")
+     (format stream "  dim3 tpb(min((uint64_t)4, size0), min((uint64_t)4, size1), min((uint64_t)16, size2));~%")
      (format stream "  dim3 nb(size0 / tpb.x, size1 / tpb.y, size2 / tpb.z);~%")))
   (format stream "  ~A_impl<<<nb, tpb, 0, starpu_cuda_get_local_stream()>>>(~{~A~^, ~});~%"
           name
@@ -74,13 +78,17 @@
                  collect (format nil "start~D" axis)
                  collect (format nil "end~D" axis)
                  collect (format nil "step~D" axis))
-           (loop for (type rank) in *dst-array-info* for axis from 0
+           (loop for (ntype irefs) in *dst-array-info* for axis from 0
+                 for type = (ntype-c-type ntype)
+                 for rank = (length irefs)
                  collect (format nil "dst~D" axis)
-                 append (loop for index below rank collect (format nil "dst~Do~D" axis index))
+                 collect (format nil "dst~Dskip" axis)
                  append (loop for index below (1- rank) collect (format nil "dst~Ds~D" axis index)))
-           (loop for (type rank) in *src-array-info* for axis from 0
+           (loop for (ntype irefs) in *src-array-info* for axis from 0
+                 for type = (ntype-c-type ntype)
+                 for rank = (length irefs)
                  collect (format nil "src~D" axis)
-                 append (loop for index below rank collect (format nil "src~Do~D" axis index))
+                 collect (format nil "src~Dskip" axis)
                  append (loop for index below (1- rank) collect (format nil "src~Ds~D" axis index)))
            (kernel-coeffs)))
   (format stream "  cudaError_t status = cudaGetLastError();~%")
