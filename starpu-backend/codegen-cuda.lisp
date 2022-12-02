@@ -3,8 +3,6 @@
 (in-package #:petalisp.starpu-backend)
 
 (defun write-blueprint-cuda (name stream)
-  (when *emit-verbose-code*
-    (format stream "#include <stdio.h>~%"))
   (format stream "#include <math.h>~%")
   (format stream "#include <starpu.h>~%")
   ;; Write the CUDA kernel.
@@ -32,7 +30,10 @@
   ;; Compute the loop indices.
   (loop for range-info in *iteration-space-info* for axis from 0 do
     (if (< axis 3)
-        (let ((char (schar "xyz" axis)))
+        (let ((char (schar "xyz" (- *iteration-space-rank* 1 axis))))
+          (when *emit-verbose-code*
+            (format stream "  printf(\"blockIdx.~C: %d, blockDim.~C: %d, threadIdx.~C: %d\\n\", blockIdx.~C, blockDim.~C, threadIdx.~C);~%"
+                    char char char char char char))
           (format stream "  int64_t i~D = start~D + (blockIdx.~C * blockDim.~C + threadIdx.~C) * step~D;~%"
                   axis axis char char char axis)
           (format stream "  if (!(i~D < end~D)) {return;}~%"
@@ -58,19 +59,19 @@
      (format stream "  dim3 nb(1);~%"))
     (1
      (format stream "  uint64_t size0 = (end0 - start0) / step0;~%")
-     (format stream "  int tpb(min((uint64_t)64, size0));~%")
-     (format stream "  dim3 nb(size0 / tpb);~%"))
+     (format stream "  dim3 tpb(min((uint64_t)256, size0));~%")
+     (format stream "  dim3 nb(1 + ((size0 / tpb) / tpb.x));~%"))
     (2
      (format stream "  uint64_t size0 = (end0 - start0) / step0;~%")
      (format stream "  uint64_t size1 = (end1 - start1) / step1;~%")
-     (format stream "  dim3 tpb(min((uint64_t)16, size0), min((uint64_t)16, size1));~%")
-     (format stream "  dim3 nb(size0 / tpb.x, size1 / tpb.y);~%"))
+     (format stream "  dim3 tpb(min((uint64_t)32, size1), min((uint64_t)32, size0));~%")
+     (format stream "  dim3 nb(1 + ((size1-1) / tpb.x), 1 + ((size0-1) / tpb.y));~%"))
     (t
      (format stream "  uint64_t size0 = (end0 - start0) / step0;~%")
      (format stream "  uint64_t size1 = (end1 - start1) / step1;~%")
      (format stream "  uint64_t size2 = (end2 - start2) / step2;~%")
-     (format stream "  dim3 tpb(min((uint64_t)4, size0), min((uint64_t)4, size1), min((uint64_t)16, size2));~%")
-     (format stream "  dim3 nb(size0 / tpb.x, size1 / tpb.y, size2 / tpb.z);~%")))
+     (format stream "  dim3 tpb(min((uint64_t)32, size2), min((uint64_t)4, size1), min((uint64_t)8, size0));~%")
+     (format stream "  dim3 nb(1 + ((size2-1) / tpb.x), 1 + ((size1-1) / tpb.y), 1 + ((size0-1) / tpb.z));~%")))
   (format stream "  ~A_impl<<<nb, tpb, 0, starpu_cuda_get_local_stream()>>>(~{~A~^, ~});~%"
           name
           (append

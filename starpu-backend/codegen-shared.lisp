@@ -70,7 +70,7 @@
   (format stream "  {~%")
   (when *emit-verbose-code*
     (format stream "    printf(\"iteration (~{~A~^ ~})\\n\"~{, i~D~});~%"
-            (loop for axis below *iteration-space-rank* collect "%jd")
+            (loop for axis below *iteration-space-rank* collect "%lld")
             (loop for axis below *iteration-space-rank* collect axis)))
   (let ((instruction-number 0)
         (*scaling-counter* 0)
@@ -137,7 +137,7 @@
              buffer-number
              *index-counter*)
      (when *emit-verbose-code*
-       (format stream "    printf(\"~A = src~D[%jd] = ~A\\n\", index~D, ~A);~%"
+       (format stream "    printf(\"~A = src~D[%lld] = ~A\\n\", index~D, ~A);~%"
                target-variable
                buffer-number
                (type-format-string
@@ -154,7 +154,7 @@
              *index-counter*
              instruction-number)
      (when *emit-verbose-code*
-       (format stream "    printf(\"dst~D[%jd] = v~D\\n\", index~D);~%"
+       (format stream "    printf(\"dst~D[%lld] = v~D\\n\", index~D);~%"
                buffer-number
                instruction-number
                *index-counter*))
@@ -245,7 +245,7 @@
               arguments)
       (when *emit-verbose-code*
         (loop for argument in arguments do
-          (format stream "  printf(\"~A = %jd\\n\", ~:*~A);~%"
+          (format stream "  printf(\"~A = %lld\\n\", ~:*~A);~%"
                   argument)))))
   ;; Unpack all StarPU buffers.
   (let ((buffer-number -1))
@@ -315,7 +315,7 @@
 (defun write-epilogue (name stream)
   (when *emit-verbose-code*
     (format stream "  printf(\"Done executing ~A\\n\");~%" name)
-    (format stream "  fflush(stdout);~%")))
+    (format stream "  fflush(NULL);~%")))
 
 (defun ntype-c-type (ntype)
   (petalisp.type-inference:ntype-subtypecase ntype
