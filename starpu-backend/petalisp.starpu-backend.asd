@@ -10,7 +10,7 @@
    "trivia"
    "trivial-garbage"
    "petalisp.utilities"
-   "petalisp.type-inference"
+   "typo"
    "petalisp.core"
    "petalisp.ir"
    "split-sequence")
