@@ -60,11 +60,11 @@
     (1
      (format stream "  uint64_t size0 = (end0 - start0) / step0;~%")
      (format stream "  dim3 tpb(min((uint64_t)256, size0));~%")
-     (format stream "  dim3 nb(1 + ((size0 / tpb) / tpb.x));~%"))
+     (format stream "  dim3 nb(1 + ((size0-1) / tpb.x));~%"))
     (2
      (format stream "  uint64_t size0 = (end0 - start0) / step0;~%")
      (format stream "  uint64_t size1 = (end1 - start1) / step1;~%")
-     (format stream "  dim3 tpb(min((uint64_t)32, size1), min((uint64_t)32, size0));~%")
+     (format stream "  dim3 tpb(min((uint64_t)32, size1), min((uint64_t)16, size0));~%")
      (format stream "  dim3 nb(1 + ((size1-1) / tpb.x), 1 + ((size0-1) / tpb.y));~%"))
     (t
      (format stream "  uint64_t size0 = (end0 - start0) / step0;~%")
