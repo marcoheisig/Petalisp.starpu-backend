@@ -79,7 +79,7 @@
 (defun make-starpu-data (buffer)
   (let* ((shape (buffer-shape buffer))
          (ntype (buffer-ntype buffer))
-         (size (ceiling (type:ntype-bits ntype) 8)))
+         (size (ceiling (typo:ntype-bits ntype) 8)))
     (trivia:ematch (shape-ranges shape)
       ((list)
        (starpu:make-vector :nx 1 :size size))
